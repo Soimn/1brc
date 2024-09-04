@@ -24,7 +24,8 @@ typedef struct Thread_Context
   HANDLE init_event;
   __m256* buffer;
   u64 buffer_size;
-  u64 ticks;
+  u64 start_ticks;
+  u64 end_ticks;
 } Thread_Context;
 
 // NOTE: buffer_size must be a multiple of 1024
@@ -33,7 +34,7 @@ void __vectorcall ReadFullSpeed(u64 buffer_size, __m256* buffer);
 DWORD
 ChewThroughBuffer(void* params)
 {
-  Thread_Context* context = params;
+  volatile Thread_Context* context = params;
 
   HANDLE chew_event = context->chew_event;
   HANDLE init_event = context->init_event;
@@ -52,7 +53,10 @@ ChewThroughBuffer(void* params)
   
   ReadFullSpeed(buffer_size, buffer);
 
-  context->ticks = __rdtsc() - start_ticks;
+  u64 end_ticks = __rdtsc();
+
+  context->start_ticks = start_ticks;
+  context->end_ticks   = end_ticks;
 
   return 0;
 }
@@ -123,7 +127,8 @@ main(int argc, char** argv)
     thread_contexts[i].init_event   = init_events[i];
     thread_contexts[i].buffer       = (__m256*)((u8*)buffer + i*per_thread_buffer_size);
     thread_contexts[i].buffer_size  = per_thread_buffer_size;
-    thread_contexts[i].ticks        = 0;
+    thread_contexts[i].start_ticks  = 0;
+    thread_contexts[i].end_ticks    = 0;
 
     thread_handles[i] = CreateThread(0, 0, ChewThroughBuffer, &thread_contexts[i], 0, 0);
 
@@ -140,12 +145,17 @@ main(int argc, char** argv)
 
   WaitForMultipleObjects(thread_count, thread_handles, TRUE, INFINITE);
 
+  u64 earliest_start_ticks = ~(u64)0;
+  u64 latest_end_ticks     = 0;
   u64 total_ticks = 0;
   u64 min_ticks   = ~(u64)0;
   u64 max_ticks   = 0;
   for (int i = 0; i < thread_count; ++i)
   {
-    u64 ticks = thread_contexts[i].ticks;
+    if (thread_contexts[i].start_ticks < earliest_start_ticks) earliest_start_ticks = thread_contexts[i].start_ticks;
+    if (thread_contexts[i].end_ticks > latest_end_ticks) latest_end_ticks = thread_contexts[i].end_ticks;
+
+    u64 ticks = thread_contexts[i].end_ticks - thread_contexts[i].start_ticks;
 
     total_ticks += ticks;
     if (ticks < min_ticks) min_ticks = ticks;
@@ -176,7 +186,11 @@ main(int argc, char** argv)
   f64 min_time = (f64)min_ticks/rdtsc_freq;
   f64 avg_time = ((f64)total_ticks/thread_count)/rdtsc_freq;
   f64 per_thread_GB = (f64)per_thread_buffer_size/(1ULL << 30);
-  printf("%.1f GB per thread, max %.2f GB/s, min %.2f GB/s, avg %.2f GB/s\n", per_thread_GB, per_thread_GB/max_time, per_thread_GB/min_time, per_thread_GB/avg_time);
+  printf("per thread:  read %.1f GB, max %.2f GB/s, min %.2f GB/s, avg %.2f GB/s\n", per_thread_GB, per_thread_GB/max_time, per_thread_GB/min_time, per_thread_GB/avg_time);
+
+  f64 wall_time = (f64)(latest_end_ticks - earliest_start_ticks)/rdtsc_freq;
+  f64 buffer_size_GB = (f64)buffer_size/(1ULL << 30);
+  printf("all threads: read %.1f GB, %.2f GB/s\n", buffer_size_GB, buffer_size_GB/wall_time);
 
   return 0;
 }
