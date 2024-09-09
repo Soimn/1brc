@@ -36,6 +36,8 @@ if "%2" neq "" goto invalid_arguments
 nasm -o membench_asm.obj -f win64 ..\src\membench.asm
 cl %debug_compile_options% ..\src\membench.c /link %link_options% /pdb:membench.pdb /out:membench.exe membench_asm.obj
 
+cl %compile_options% ..\src\hashbench.c /link %link_options% /pdb:hashbench.pdb /out:hashbench.exe
+
 cl %compile_options% ..\src\main.c /link %link_options% /pdb:1brc.pdb /out:1brc.exe
 
 goto end
