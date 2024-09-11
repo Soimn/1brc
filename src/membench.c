@@ -24,6 +24,7 @@ typedef struct Thread_Context
   HANDLE init_event;
   __m256* buffer;
   u64 buffer_size;
+  u64 repcount;
   u64 start_ticks;
   u64 end_ticks;
 } Thread_Context;
@@ -40,6 +41,7 @@ ChewThroughBuffer(void* params)
   HANDLE init_event = context->init_event;
   __m256* buffer  = context->buffer;
   u64 buffer_size = context->buffer_size;
+  u64 repcount    = context->repcount;
 
   for (u64 i = 0; i < buffer_size/4; ++i)
   {
@@ -51,7 +53,7 @@ ChewThroughBuffer(void* params)
 
   u64 start_ticks = __rdtsc();
   
-  ReadFullSpeed(buffer_size, buffer);
+  for (u64 i = 0; i < repcount; ++i) ReadFullSpeed(buffer_size, buffer);
 
   u64 end_ticks = __rdtsc();
 
@@ -60,6 +62,8 @@ ChewThroughBuffer(void* params)
 
   return 0;
 }
+
+#define REPCOUNT 8
 
 int
 main(int argc, char** argv)
@@ -127,6 +131,7 @@ main(int argc, char** argv)
     thread_contexts[i].init_event   = init_events[i];
     thread_contexts[i].buffer       = (__m256*)((u8*)buffer + i*per_thread_buffer_size);
     thread_contexts[i].buffer_size  = per_thread_buffer_size;
+    thread_contexts[i].repcount     = REPCOUNT;
     thread_contexts[i].start_ticks  = 0;
     thread_contexts[i].end_ticks    = 0;
 
@@ -180,16 +185,17 @@ main(int argc, char** argv)
     rdtsc_freq = (f64)(end_rdtsc - start_rdtsc) * ((f64)perf_freq.QuadPart / (end_time.QuadPart - start_time.QuadPart));
   }
 
-  printf("Chewed through %.1f GB in %.6f s (rdtsc freq: %f Hz)\n", (f64)buffer_size/(1ULL << 30), total_ticks/rdtsc_freq, rdtsc_freq);
+  f64 wall_time = (f64)(latest_end_ticks - earliest_start_ticks)/rdtsc_freq;
+
+  printf("Chewed through %.1f GB in %.6f s (rdtsc freq: %f Hz)\n", (f64)(buffer_size*REPCOUNT)/(1ULL << 30), wall_time, rdtsc_freq);
 
   f64 max_time = (f64)max_ticks/rdtsc_freq;
   f64 min_time = (f64)min_ticks/rdtsc_freq;
   f64 avg_time = ((f64)total_ticks/thread_count)/rdtsc_freq;
-  f64 per_thread_GB = (f64)per_thread_buffer_size/(1ULL << 30);
+  f64 per_thread_GB = (f64)(per_thread_buffer_size*REPCOUNT)/(1ULL << 30);
   printf("per thread:  read %.1f GB, max %.2f GB/s, min %.2f GB/s, avg %.2f GB/s\n", per_thread_GB, per_thread_GB/max_time, per_thread_GB/min_time, per_thread_GB/avg_time);
 
-  f64 wall_time = (f64)(latest_end_ticks - earliest_start_ticks)/rdtsc_freq;
-  f64 buffer_size_GB = (f64)buffer_size/(1ULL << 30);
+  f64 buffer_size_GB = (f64)(buffer_size*REPCOUNT)/(1ULL << 30);
   printf("all threads: read %.1f GB, %.2f GB/s\n", buffer_size_GB, buffer_size_GB/wall_time);
 
   return 0;
