@@ -449,9 +449,12 @@ String WeatherStations[] = {
   MS_STRING("Zürich"),
 };
 
-#define MAX_LINE_COUNT_LG2 25
+#define MAX_LINE_COUNT_LG2 29
 #define MAX_LINE_COUNT (1ULL << MAX_LINE_COUNT_LG2)
+#define MAX_UNIQUE_LINE_COUNT_LG2 14
+#define MAX_UNIQUE_LINE_COUNT (1ULL << MAX_UNIQUE_LINE_COUNT_LG2)
 #define MAX_STRING_LEN_LG2 7
+#define MAX_STRING_LEN (1ULL << MAX_STRING_LEN_LG2)
 
 static u64
 FNV1A(u8* data, u32 len)
@@ -475,7 +478,7 @@ Hash(u8* data, u32 len)
 #define REF_TABLE_SIZE_LG2 15
 #define REF_TABLE_SIZE (1ULL << REF_TABLE_SIZE_LG2)
 #define REF_TABLE_MASK (REF_TABLE_SIZE-1)
-#define REF_TABLE_STRING_STORAGE_CAP_LG2 (MAX_LINE_COUNT_LG2 + MAX_STRING_LEN_LG2)
+#define REF_TABLE_STRING_STORAGE_CAP_LG2 (MAX_UNIQUE_LINE_COUNT_LG2 + MAX_STRING_LEN_LG2)
 #define REF_TABLE_STRING_STORAGE_CAP (1ULL << REF_TABLE_STRING_STORAGE_CAP_LG2)
 
 typedef struct Ref_Table_Entry
@@ -502,7 +505,7 @@ static Ref_Table
 RefTable_Create()
 {
   Ref_Table_Entry* entries = VirtualAlloc(0, REF_TABLE_SIZE*sizeof(Ref_Table_Entry), MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
-  u8* strings              = VirtualAlloc(0, REF_TABLE_STRING_STORAGE_CAP*sizeof(Ref_Table_Entry), MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
+  u8* strings              = VirtualAlloc(0, REF_TABLE_STRING_STORAGE_CAP*MAX_STRING_LEN, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
 
   return (Ref_Table){
     .entry_count = 0,
@@ -578,21 +581,43 @@ main(int argc, char** argv)
     }
   }
 
-  String* lines = VirtualAlloc(0, num_lines*sizeof(String), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+  u32 content_cur = 0;
+  u32 content_commit_cur = num_lines*10;
+  u8* content = VirtualAlloc(0, num_lines*MAX_STRING_LEN, MEM_RESERVE, PAGE_READWRITE);
+  VirtualAlloc(content, content_commit_cur, MEM_COMMIT, PAGE_READWRITE);
 
   srand((u32)time(0));
   for (u32 i = 0; i < num_lines; ++i)
   {
-    lines[i] = WeatherStations[rand() % ARRAY_SIZE(WeatherStations)];
+    String string = WeatherStations[rand() % ARRAY_SIZE(WeatherStations)];
+
+    if (content_commit_cur - content_cur < string.len + 1)
+    {
+      content_commit_cur += 1ULL << 20;
+      VirtualAlloc(content, content_commit_cur, MEM_COMMIT, PAGE_READWRITE);
+    }
+
+    memcpy(content + content_cur, string.data, string.len);
+    content_cur += string.len;
+    content[content_cur++] = 0;
   }
 
   u64 start = __rdtsc();
 
   Ref_Table table = RefTable_Create();
 
+  u8* scan = content;
   for (u32 i = 0; i < num_lines; ++i)
   {
-    Ref_Table_Entry* entry = RefTable_Put(&table, lines[i].data, lines[i].len);
+    u8* data = scan;
+
+    for (; *scan != 0; ++scan);
+
+    u32 len = (u32)(scan - data);
+
+    ++scan;
+
+    Ref_Table_Entry* entry = RefTable_Put(&table, data, len);
     entry->count += 1;
   }
 
